@@ -3,13 +3,17 @@ Unit tests for agent_client.py — transport, URL validation, headers, JSON hand
 No live network sockets. Uses unittest.mock to intercept urllib calls.
 """
 
+import gc
 import io
+import itertools
 import json
 import os
 import sys
+import tempfile
 import unittest
 import urllib.error
 import urllib.request
+import warnings
 from unittest import mock
 
 # Ensure scripts/ is importable
@@ -318,6 +322,210 @@ class TestMalformedTransport(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 agent_client._request("GET", "channels")
             self.assertNotIn("private-token", stderr.getvalue())
+
+
+LOOPBACK_ENV = {
+    "SANKYAKU_TOKEN": "ska_test_abc",
+    "SANKYAKU_URL": "http://127.0.0.1:3000",
+}
+ERROR_URL = "http://127.0.0.1:3000/api/agent/channels"
+
+
+class _TrackingStream(io.BytesIO):
+    """Response body stream that records whether it was closed."""
+
+    def __init__(self, data: bytes = b""):
+        super().__init__(data)
+        self.close_count = 0
+
+    def close(self):
+        self.close_count += 1
+        super().close()
+
+
+class _UnreadableStream(_TrackingStream):
+    """Stream whose read fails, to exercise the read-failure branch."""
+
+    def read(self, *args, **kwargs):
+        raise OSError("stream failure")
+
+
+class _FakeResponse:
+    """Minimal urllib-like response around a stream, tracking closure."""
+
+    def __init__(self, code: int, fp, msg: str = "OK"):
+        self.code = code
+        self.msg = msg
+        self.fp = fp
+        self.close_count = 0
+
+    def getcode(self):
+        return self.code
+
+    def info(self):
+        return {}
+
+    def read(self, *args):
+        return self.fp.read(*args)
+
+    def close(self):
+        self.close_count += 1
+        self.fp.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
+        return False
+
+
+class TestResponseClosure(unittest.TestCase):
+    """Error and refused-redirect responses must be closed before exiting."""
+
+    def _run_request(self, error):
+        """Drive _request against a raising opener; return stderr text."""
+        with mock.patch.object(agent_client, "_build_opener") as opener, mock.patch(
+            "sys.stderr", new_callable=io.StringIO
+        ) as stderr:
+            opener.return_value.open.side_effect = error
+            with self.assertRaises(SystemExit):
+                agent_client._request("GET", "channels")
+        return stderr.getvalue()
+
+    @mock.patch.dict(os.environ, LOOPBACK_ENV, clear=False)
+    def test_http_error_json_body_closed(self):
+        """A JSON error body is read, reported, and then closed."""
+        stream = _TrackingStream(b'{"error": "Unauthorized"}')
+        error = urllib.error.HTTPError(ERROR_URL, 401, "Unauthorized", {}, stream)
+
+        stderr = self._run_request(error)
+
+        self.assertTrue(stream.closed)
+        self.assertGreaterEqual(stream.close_count, 1)
+        self.assertIn("HTTP 401: Unauthorized", stderr)
+
+    @mock.patch.dict(os.environ, LOOPBACK_ENV, clear=False)
+    def test_malformed_error_body_closed(self):
+        """Non-JSON, non-UTF-8 and unreadable error bodies are still closed."""
+        cases = [
+            _TrackingStream(b"not json"),
+            _TrackingStream(b"\xff"),
+            _UnreadableStream(b"unused"),
+        ]
+        for stream in cases:
+            with self.subTest(stream=type(stream).__name__):
+                error = urllib.error.HTTPError(ERROR_URL, 500, "Boom", {}, stream)
+
+                stderr = self._run_request(error)
+
+                self.assertTrue(stream.closed)
+                self.assertGreaterEqual(stream.close_count, 1)
+                self.assertIn("HTTP 500:", stderr)
+
+    @mock.patch.dict(os.environ, LOOPBACK_ENV, clear=False)
+    def test_error_body_with_token_is_redacted_and_closed(self):
+        """Redaction still applies when the body echoes the token."""
+        with mock.patch.dict(os.environ, {"SANKYAKU_TOKEN": "private-token"}):
+            stream = _TrackingStream(b'{"error": "bad token private-token"}')
+            error = urllib.error.HTTPError(ERROR_URL, 403, "Forbidden", {}, stream)
+
+            stderr = self._run_request(error)
+
+        self.assertTrue(stream.closed)
+        self.assertNotIn("private-token", stderr)
+        self.assertIn("[redacted]", stderr)
+
+    def test_redirect_rejection_closes_response(self):
+        """A refused redirect is closed by the handler, which still exits."""
+        stream = _TrackingStream(b"redirect body")
+        response = _FakeResponse(302, stream, msg="Found")
+        handler = agent_client._NoRedirectHandler()
+
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            with self.assertRaises(SystemExit):
+                handler.http_response(mock.MagicMock(), response)
+
+        self.assertGreaterEqual(response.close_count, 1)
+        self.assertTrue(stream.closed)
+        self.assertIn("Server returned redirect (302), refusing to follow", stderr.getvalue())
+
+    def test_success_response_passes_through_open(self):
+        """Non-redirect responses are handed to the caller still open."""
+        stream = _TrackingStream(b"{}")
+        response = _FakeResponse(200, stream)
+        handler = agent_client._NoRedirectHandler()
+        handler.parent = mock.MagicMock()
+
+        self.assertIs(handler.http_response(mock.MagicMock(), response), response)
+
+        self.assertEqual(response.close_count, 0)
+        self.assertFalse(stream.closed)
+
+    def test_close_response_tolerates_failures(self):
+        """A response that cannot be closed must not mask the original error."""
+        response = mock.MagicMock()
+        response.close.side_effect = OSError("already gone")
+        agent_client._close_response(response)
+        agent_client._close_response(object())
+
+
+class TestNoResourceWarnings(unittest.TestCase):
+    """The error and redirect paths must not leak real file resources."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self._counter = itertools.count()
+
+    def _real_stream(self, data: bytes):
+        """Real file object: emits ResourceWarning if left unclosed."""
+        path = os.path.join(self._tmpdir.name, f"body-{next(self._counter)}")
+        with open(path, "wb") as handle:
+            handle.write(data)
+        return open(path, "rb")
+
+    def _assert_no_resource_warning(self, run):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            run()
+            gc.collect()
+        leaked = [str(w.message) for w in caught if w.category is ResourceWarning]
+        self.assertEqual(leaked, [])
+
+    @mock.patch.dict(os.environ, LOOPBACK_ENV, clear=False)
+    def test_http_error_paths_emit_no_resource_warning(self):
+        for data in [b'{"error": "nope"}', b"not json", b"\xff"]:
+            with self.subTest(data=data):
+
+                def run(data=data):
+                    error = urllib.error.HTTPError(
+                        ERROR_URL, 500, "Boom", {}, self._real_stream(data)
+                    )
+                    with mock.patch.object(
+                        agent_client, "_build_opener"
+                    ) as opener, mock.patch("sys.stderr", new_callable=io.StringIO):
+                        opener.return_value.open.side_effect = error
+                        try:
+                            agent_client._request("GET", "channels")
+                        except SystemExit:
+                            pass
+                    del error
+
+                self._assert_no_resource_warning(run)
+
+    def test_redirect_rejection_emits_no_resource_warning(self):
+        def run():
+            response = _FakeResponse(302, self._real_stream(b"redirect body"))
+            handler = agent_client._NoRedirectHandler()
+            with mock.patch("sys.stderr", new_callable=io.StringIO):
+                try:
+                    handler.http_response(mock.MagicMock(), response)
+                except SystemExit:
+                    pass
+            del response
+
+        self._assert_no_resource_warning(run)
 
 
 if __name__ == "__main__":

@@ -42,6 +42,17 @@ def _fail(message: str) -> None:
     raise SystemExit(1)
 
 
+def _close_response(response) -> None:
+    """Release an HTTP response's underlying socket, ignoring close failures."""
+    close = getattr(response, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except Exception:
+        pass
+
+
 def _validate_url(url: str) -> None:
     """Ensure URL scheme is safe: HTTP only for loopback, HTTPS otherwise."""
     try:
@@ -74,6 +85,8 @@ class _NoRedirectHandler(urllib.request.HTTPErrorProcessor):
     def http_response(self, request, response):  # type: ignore[override]
         code = response.getcode()
         if 300 <= code < 400:
+            # The caller never sees this response, so close it here.
+            _close_response(response)
             print(
                 f"Error: Server returned redirect ({code}), refusing to follow",
                 file=sys.stderr,
@@ -122,11 +135,15 @@ def _request(
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
         try:
-            err_body = e.read().decode("utf-8")
-            err_json = json.loads(err_body)
-            msg = err_json.get("error", err_body)
-        except Exception:
-            msg = str(e)
+            try:
+                err_body = e.read().decode("utf-8")
+                err_json = json.loads(err_body)
+                msg = err_json.get("error", err_body)
+            except Exception:
+                msg = str(e)
+        finally:
+            # _fail raises SystemExit, so close the error body first.
+            _close_response(e)
         _fail(f"HTTP {e.code}: {msg}")
     except urllib.error.URLError as e:
         _fail(f"Connection error: {e.reason}")
