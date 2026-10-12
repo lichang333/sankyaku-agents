@@ -1,0 +1,288 @@
+@import "tailwindcss";
+
+@theme {
+  /* 沿用三脚家族的配色 */
+  --color-feather: #58cc02;
+  --color-feather-dark: #46a302;
+  --color-macaw: #1cb0f6;
+  --color-macaw-dark: #1899d6;
+  --color-bee: #ffc800;
+  --color-bee-dark: #e6ac00;
+  --color-cardinal: #ff4b4b;
+  --color-cardinal-dark: #d63b3b;
+  --color-fox: #ff9600;
+  --color-fox-dark: #e08600;
+  --color-beetle: #ce82ff;
+  --color-beetle-dark: #a568cc;
+  --color-eel: #4b4b4b;
+  --color-hare: #afafaf;
+  --color-swan: #e5e5e5;
+  --color-polar: #f7f7f7;
+}
+
+:root {
+  --bg: #fffdf7;
+  --card: #ffffff;
+  --card-border: #e5e5e5;
+  --text: #3c3c3c;
+  --text-mid: #777777;
+  --track: #f0f0f0;
+  /* 列的底色比页面底色深一层：卡片浮在列上，列铺在页面上，三层要分得开 */
+  --lane: #f2f0ea;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131f24;
+    --card: #202f36;
+    --card-border: #37464f;
+    --text: #f1f7fb;
+    --text-mid: #8fa3ad;
+    --track: #2b3a42;
+    --lane: #182429;
+    color-scheme: dark;
+  }
+}
+
+html {
+  background: var(--bg);
+  overscroll-behavior-y: none;
+  touch-action: manipulation;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── 多邻国式厚底 3D 按钮：--sh 为底边阴影色 ── */
+.btn3d {
+  border-radius: 14px;
+  font-weight: 800;
+  box-shadow: 0 4px 0 var(--sh, #e5e5e5);
+  transition: transform 0.06s ease, box-shadow 0.06s ease, filter 0.15s ease;
+  user-select: none;
+}
+.btn3d:active:not(:disabled) {
+  transform: translateY(4px);
+  box-shadow: 0 0 0 var(--sh, #e5e5e5);
+}
+.btn3d:disabled {
+  filter: saturate(0.3) opacity(0.6);
+}
+
+.duo-card {
+  background: var(--card);
+  border: 2px solid var(--card-border);
+  border-radius: 18px;
+}
+
+.text-mid {
+  color: var(--text-mid);
+}
+
+/*
+ * iOS 在聚焦字号小于 16px 的输入框时会自动放大整页，而且放大会留着不还原。
+ * 手机上把输入类控件顶到 16px 从源头避免，不用 maximum-scale 去禁缩放。
+ */
+@media (max-width: 767px) {
+  input:not([type="range"]):not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* ══ 看板 ══ */
+
+/*
+ * 板是横着滚的，列是竖着滚的。手机上一屏放不下两列，
+ * 用 scroll-snap 让一列刚好停在屏中——半列露在边上是最难受的状态。
+ */
+.board-scroll {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  padding-bottom: 0.5rem;
+  scrollbar-width: thin;
+  /*
+   * 板占满剩下的这一屏，卡片多了在列内部滚，整页不滚——
+   * 整页一滚，列头（在制品几张、超没超）就滑出去了，而那正是最该一直看得见的东西。
+   *
+   * 这个减数是量出来的常数：手机上要让开顶栏 + 板名 + 筛选条 + 底部导航，
+   * 桌面上没有底部导航所以少减一截。宁可减多一点点：矮一点只是列内早一点出现滚动条，
+   * 高一点就会顶出整页滚动条，那才是要命的。
+   */
+  height: calc(100dvh - 15rem);
+}
+@media (min-width: 768px) {
+  .board-scroll {
+    scroll-snap-type: none;
+    height: calc(100dvh - 12rem);
+  }
+}
+
+/* 列和「加一列」占位共用同一份宽度：两者并排站着，宽窄不一会显得后者是残的 */
+.lane,
+.lane-slot {
+  flex: 0 0 auto;
+  width: min(85vw, 19rem);
+}
+
+.lane {
+  scroll-snap-align: start;
+  background: var(--lane);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+}
+
+.lane-cards {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* 留白窄一点，卡片占得满一点——列本身已经有底色分区，不靠留白撑排面 */
+  padding: 0 0.125rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 3rem;
+}
+
+/* 超了在制品上限：列头描一圈红。不拦，只是让人不可能看不见。 */
+.lane-over {
+  outline: 2px solid var(--color-cardinal);
+  outline-offset: -2px;
+}
+
+/* ── 卡片 ── */
+.kcard {
+  background: var(--card);
+  border: 2px solid var(--card-border);
+  border-radius: 12px;
+  padding: 0.5rem 0.625rem;
+  text-align: left;
+  width: 100%;
+  display: block;
+  /*
+   * 竖向滚动交给浏览器，横向留给我们判断是不是要拖。
+   * 长按进入拖拽后由非被动的 touchmove 接管（见 components/Board.tsx）。
+   */
+  touch-action: pan-y;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+.kcard:active {
+  border-color: var(--color-beetle);
+}
+
+/* 同上：连图片和文字的原生拖拽一起关掉，Safari 认的是带前缀的那个 */
+.kcard,
+.kcard * {
+  -webkit-user-drag: none;
+}
+
+/* 拖起来的那张：原位留一个淡淡的坑 */
+.kcard-ghost {
+  opacity: 0.35;
+  filter: grayscale(0.6);
+}
+
+/* 跟着手指走的那一张 */
+.drag-layer {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  width: var(--dw, 16rem);
+  transform: rotate(2.5deg);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.28);
+  border-radius: 12px;
+}
+
+/* 落点提示：一条横线，比「整块变色」更能说明卡会插在哪儿 */
+.drop-line {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--color-beetle);
+  margin: -0.125rem 0;
+}
+
+/* 拖列时的落点：一条竖线，插在两列之间 */
+.drop-col {
+  flex: 0 0 auto;
+  width: 3px;
+  align-self: stretch;
+  min-height: 4rem;
+  border-radius: 999px;
+  background: var(--color-beetle);
+}
+
+/* 被拖走的那一列：原位留一个淡淡的坑 */
+.lane-ghost {
+  opacity: 0.35;
+}
+
+/* 列头就是拖整列的抓手 */
+.lane-head {
+  cursor: grab;
+  touch-action: pan-y;
+  -webkit-user-drag: none;
+}
+.lane-head button,
+.lane-head input {
+  cursor: auto;
+}
+
+/* 拖列时跟着手指走的那一小条 */
+.lane-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 12px;
+  background: var(--lane);
+  border: 2px solid var(--color-beetle);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+/* 拖拽进行中：禁掉整页选中，不然手指划过会选中一片文字 */
+.dragging-active,
+.dragging-active * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  cursor: grabbing !important;
+}
+
+/* 卡龄标记 */
+.age-slow { color: var(--color-fox); }
+.age-stuck { color: var(--color-cardinal); }
+
+/* 两行截断，卡片标题和评论都用得上 */
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 卡片正文：只支持换行和链接，不做 Markdown —— 见 README */
+.card-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.75;
+}
+.card-body a {
+  color: var(--color-macaw);
+  text-decoration: underline;
+}
