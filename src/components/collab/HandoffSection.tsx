@@ -200,7 +200,7 @@ export default function HandoffSection({
       {/* 无可用 Agent 提示 */}
       {grantedAgents.length === 0 && (
         <div className="mt-3 rounded-xl border-2 border-swan bg-[var(--track)] p-2.5 text-[11px] font-bold text-hare dark:border-[#37464f]">
-          当前频道尚未授权任何 Agent 成员。频道创建者可于下方授权 Agent 参与任务交接。
+          当前频道尚未授权任何 Agent 成员。你可在下方授权自己的 Agent 参与任务交接。
         </div>
       )}
 

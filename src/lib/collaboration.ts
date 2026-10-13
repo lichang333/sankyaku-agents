@@ -490,8 +490,8 @@ export function listChannels(principal: Principal): ChannelPublic[] {
 
 /**
  * Grant an agent access to a channel.
- * Only the channel creator may grant. The agent's owner must have visibility
- * to all linked boards. The agent must not be revoked.
+ * A human channel member may grant only agents they own. The agent must not be revoked.
+ * The agent's owner must have visibility to all linked boards.
  */
 export function grantAgent(
   principal: Principal,
@@ -505,10 +505,12 @@ export function grantAgent(
   const ch = q("SELECT id, creator_id FROM collab_channels WHERE id = ?").get(channelId) as
     | { id: number; creator_id: string }
     | undefined;
-  if (!ch || ch.creator_id !== principal.id || !canAccessChannel(principal, channelId)) throw new CollabError(404, "Not found");
+  if (!ch || !canAccessChannel(principal, channelId)) throw new CollabError(404, "Not found");
 
   const agent = getAgentRow(agentId);
-  if (!agent || agent.revoked_at) throw new CollabError(404, "Not found");
+  if (!agent || agent.revoked_at || agent.owner_user_id !== principal.id) {
+    throw new CollabError(404, "Not found");
+  }
 
   // Agent's owner must have visibility to all linked boards
   if (!humanCanSeeAllChannelBoards(agent.owner_user_id, channelId))
@@ -521,7 +523,8 @@ export function grantAgent(
 }
 
 /**
- * Revoke an agent's access to a channel. Creator only.
+ * Revoke an agent's access to a channel.
+ * Allowed for the channel creator (any agent) or the agent's owner (their own agent).
  */
 export function revokeAgentGrant(
   principal: Principal,
@@ -535,7 +538,15 @@ export function revokeAgentGrant(
   const ch = q("SELECT id, creator_id FROM collab_channels WHERE id = ?").get(channelId) as
     | { id: number; creator_id: string }
     | undefined;
-  if (!ch || ch.creator_id !== principal.id || !canAccessChannel(principal, channelId)) throw new CollabError(404, "Not found");
+  if (!ch || !canAccessChannel(principal, channelId)) throw new CollabError(404, "Not found");
+
+  const isCreator = ch.creator_id === principal.id;
+  const agent = getAgentRow(agentId);
+  const isOwner = !!agent && agent.owner_user_id === principal.id;
+
+  if (!isCreator && !isOwner) {
+    throw new CollabError(404, "Not found");
+  }
 
   q("DELETE FROM collab_channel_agents WHERE channel_id = ? AND agent_id = ?").run(
     channelId,
@@ -543,14 +554,19 @@ export function revokeAgentGrant(
   );
 }
 
+export type EligibleAgent = AgentPublic & { granted: boolean; owned: boolean };
+
 /**
- * List agents eligible for a channel (for the channel creator).
- * Returns sanitized public fields only.
+ * List agents eligible for a channel.
+ * Available to any channel member.
+ * Returns principal's own non-revoked agents (owned: true).
+ * If principal is the channel creator, also includes other owners' currently granted agents (owned: false, granted: true).
+ * Returns sanitized public fields only (no tokens, hashes, or owner IDs).
  */
 export function listEligibleAgents(
   principal: Principal,
   channelId: number,
-): (AgentPublic & { granted: boolean })[] {
+): EligibleAgent[] {
   requireHuman(principal);
   requirePrincipalExists(principal);
   ensureCollabSchema();
@@ -558,33 +574,66 @@ export function listEligibleAgents(
   const ch = q("SELECT id, type, creator_id FROM collab_channels WHERE id = ?").get(channelId) as
     | { id: number; type: string; creator_id: string }
     | undefined;
-  if (!ch || ch.creator_id !== principal.id || !canAccessChannel(principal, channelId)) throw new CollabError(404, "Not found");
+  if (!ch || !canAccessChannel(principal, channelId)) throw new CollabError(404, "Not found");
 
-  // All non-revoked agents whose owner can see all channel boards
-  const agents = q(
-    "SELECT id, owner_user_id, display_name, provider, created_at, revoked_at FROM collab_agents WHERE revoked_at IS NULL",
-  ).all() as {
+  const ownRows = q(`
+    SELECT a.id, a.display_name, a.provider, a.created_at,
+           ca.channel_id IS NOT NULL AS is_granted
+    FROM collab_agents a
+    LEFT JOIN collab_channel_agents ca ON ca.agent_id = a.id AND ca.channel_id = ?
+    WHERE a.owner_user_id = ? AND a.revoked_at IS NULL
+    ORDER BY a.created_at ASC, a.id ASC
+  `).all(channelId, principal.id) as {
     id: string;
-    owner_user_id: string;
     display_name: string;
     provider: string;
     created_at: string;
-    revoked_at: string | null;
+    is_granted: number | boolean;
   }[];
 
-  const result: (AgentPublic & { granted: boolean })[] = [];
-  for (const a of agents) {
-    if (!getUser(a.owner_user_id) || !humanCanSeeAllChannelBoards(a.owner_user_id, channelId))
-      continue;
-    result.push({
-      id: a.id,
-      displayName: a.display_name,
-      provider: a.provider,
-      createdAt: a.created_at,
-      revoked: false,
-      granted: !!q("SELECT 1 FROM collab_channel_agents WHERE channel_id = ? AND agent_id = ?").get(channelId, a.id),
-    });
+  const canSeeBoards = humanCanSeeAllChannelBoards(principal.id, channelId);
+  const result: EligibleAgent[] = canSeeBoards
+    ? ownRows.map((r) => ({
+        id: r.id,
+        displayName: r.display_name,
+        provider: r.provider,
+        createdAt: r.created_at,
+        revoked: false,
+        granted: Boolean(r.is_granted),
+        owned: true,
+      }))
+    : [];
+
+  if (ch.creator_id === principal.id) {
+    const otherRows = q(`
+      SELECT a.id, a.display_name, a.provider, a.created_at, ca.granted_at
+      FROM collab_channel_agents ca
+      JOIN collab_agents a ON a.id = ca.agent_id
+      WHERE ca.channel_id = ? AND a.owner_user_id != ? AND a.revoked_at IS NULL
+      ORDER BY ca.granted_at ASC, a.created_at ASC, a.id ASC
+    `).all(channelId, principal.id) as {
+      id: string;
+      display_name: string;
+      provider: string;
+      created_at: string;
+      granted_at: string;
+    }[];
+
+    for (const r of otherRows) {
+      if (canAccessChannel({ kind: "agent", id: r.id }, channelId)) {
+        result.push({
+          id: r.id,
+          displayName: r.display_name,
+          provider: r.provider,
+          createdAt: r.created_at,
+          revoked: false,
+          granted: true,
+          owned: false,
+        });
+      }
+    }
   }
+
   return result;
 }
 

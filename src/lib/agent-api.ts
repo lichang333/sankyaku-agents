@@ -101,10 +101,13 @@ export async function handleAgentRequest(req: Request, seg: string[]): Promise<N
     }
     if (method === "POST" && seg.length === 3 && seg[0] === "handoffs") {
       const id = integer(seg[1]);
-      const b = await body(req);
       if (seg[2] === "accept") return json(acceptHandoff(p, id));
       if (seg[2] === "decline") return json(declineHandoff(p, id));
-      if (seg[2] === "complete") return json(completeHandoff(p, id, string(b.result, "result", 12000)));
+      if (seg[2] === "complete") {
+        const b = await body(req);
+        return json(completeHandoff(p, id, string(b.result, "result", 12000)));
+      }
+      return json({ error: "Not found" }, 404);
     }
     return json({ error: "Not found" }, 404);
   } catch (error) {

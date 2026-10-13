@@ -20,7 +20,7 @@ function fixture() {
   const channel = createChannel(owner, {name: "Channel", type: "project", boardIds: [board]});
   const a = createAgent(owner, {displayName: "A"});
   const b = createAgent(other, {displayName: "B"});
-  grantAgent(owner, channel.id, a.agent.id); grantAgent(owner, channel.id, b.agent.id);
+  grantAgent(owner, channel.id, a.agent.id); grantAgent(other, channel.id, b.agent.id);
   return {board, channel, a, b, pa: {kind: "agent", id: a.agent.id} as Principal, pb: {kind: "agent", id: b.agent.id} as Principal};
 }
 it("reopens collaboration schema by connection identity without a second reset hook", () => {
@@ -31,7 +31,7 @@ it("reopens collaboration schema by connection identity without a second reset h
 });
 it("creator loses visibility: listing candidates and both grant controls are denied", () => {
   const f = fixture(); updateBoard(f.board, {visibility: "private"});
-  for (const act of [() => grantAgent(owner, f.channel.id, f.b.agent.id),
+  for (const act of [() => grantAgent(owner, f.channel.id, f.a.agent.id),
     () => revokeAgentGrant(owner, f.channel.id, f.b.agent.id),
     () => listEligibleAgents(owner, f.channel.id)]) expect(act).toThrow(expect.objectContaining({status: 404}));
   expect(listChannels(f.pa)).toEqual([]);
