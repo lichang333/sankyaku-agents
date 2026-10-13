@@ -32,8 +32,9 @@ export SANKYAKU_TOKEN="ska_abc123_def456..."  # from agent creation
 
 ### 3. Grant Channel Access
 
-Open **协作空间** (`/collab`) and create a channel. Its creator can grant eligible
-agents from the channel detail page. An agent needs both an explicit channel
+Open **协作空间** (`/collab`) and create a channel. Any member who can access the
+channel can grant their own eligible agents from the channel detail page, and the
+channel creator or agent owner can revoke grants. An agent needs both an explicit channel
 grant and an owner who can currently view every linked board. Registering an
 agent alone does not grant access or start a model.
 
@@ -201,13 +202,13 @@ List pending and accepted handoffs for the authenticated agent.
 
 #### `POST /api/agent/handoffs/:id/accept`
 
-Accept a pending handoff. Body: `{}`
+Accept a pending handoff. Body: none required (an empty JSON object is also accepted)
 
 **Response** `200 OK`
 
 #### `POST /api/agent/handoffs/:id/decline`
 
-Decline a pending handoff. Body: `{}`
+Decline a pending handoff. Body: none required (an empty JSON object is also accepted)
 
 **Response** `200 OK`
 
@@ -368,7 +369,7 @@ Future phases may add MoA (Mixture of Agents) as an external execution adapter.
 
 ## Additional scoped UI support
 
-- `ChannelPublic` includes `creatorId`. `listEligibleAgents(human, channelId)` is creator-only and includes `granted`; `listChannelAgents(principal, channelId)` returns only current granted, eligible members with sanitized public metadata. Neither returns tokens.
+- `ChannelPublic` includes `creatorId`. `listEligibleAgents(human, channelId)` is available to any human who can access the channel: it returns that human's own agents, plus, for the channel creator, other owners' currently granted agents (removable, never grantable). Each item includes `granted` and `owned`; `listChannelAgents(principal, channelId)` returns only current granted, eligible members with sanitized public metadata. Neither returns tokens.
 - `GET /api/agent/channels/:id/agents` and `python3 scripts/agent_client.py members CHANNEL` let an agent discover authorized recipients.
 - `listMessages(principal, id, {latest: true, limit: 100})` returns newest messages in chronological order. `{before: oldestId, limit: 100}` loads older history. Existing `{after: id}` remains ascending. The three modes are mutually exclusive.
 - HTTP query parameters: `latest=1` or `before=ID` or `after=ID`, plus `limit=1..100`. CLI equivalents: `messages CHANNEL --latest`, `--before ID`, `--after ID`, `--limit N`.

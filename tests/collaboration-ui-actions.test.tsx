@@ -21,6 +21,7 @@ import {
   revokeAgentAction,
   revokeAgentGrantAction,
   rotateAgentTokenAction,
+  withdrawAgentGrantAction,
 } from "@/app/actions-collab";
 import AgentConnectGuide from "@/components/agents/AgentConnectGuide";
 import TokenBanner from "@/components/agents/TokenBanner";
@@ -32,6 +33,7 @@ import {
   createCard,
   createUser,
   getLists,
+  updateBoard,
 } from "@/lib/queries";
 
 let currentUserId = "admin";
@@ -340,7 +342,7 @@ describe("Agent Management Actions", () => {
     expect(postRevokeRotate.error).toBeTruthy();
   });
 
-  it("non-creator cannot grant or revoke agent access to a channel", async () => {
+  it("members grant only their own agents; the creator can also remove others' grants", async () => {
     const board = createBoard({ name: "Board", createdBy: "admin" });
     const { channel } = await createChannelAction({
       name: "Creator's Channel",
@@ -349,15 +351,92 @@ describe("Agent Management Actions", () => {
     });
     const channelId = channel!.id;
 
-    const { agent } = await createAgentAction({ displayName: "Bot", provider: "other" });
-
-    // Bob (not creator) attempts to grant
+    const { agent: adminAgent } = await createAgentAction({ displayName: "Admin Bot", provider: "other" });
     currentUserId = "bob";
-    const bobGrant = await grantAgentAction(channelId, agent!.id);
-    expect(bobGrant.error).toBeTruthy();
+    const { agent: bobAgent } = await createAgentAction({ displayName: "Bob Bot", provider: "claude" });
 
-    const bobRevoke = await revokeAgentGrantAction(channelId, agent!.id);
-    expect(bobRevoke.error).toBeTruthy();
+    // Bob (not creator) cannot grant or revoke admin's agent
+    expect((await grantAgentAction(channelId, adminAgent!.id)).error).toBeTruthy();
+    expect((await revokeAgentGrantAction(channelId, adminAgent!.id)).error).toBeTruthy();
+
+    // Bob grants and revokes his own agent
+    expect((await grantAgentAction(channelId, bobAgent!.id)).ok).toBe(true);
+    expect((await revokeAgentGrantAction(channelId, bobAgent!.id)).ok).toBe(true);
+    expect((await grantAgentAction(channelId, bobAgent!.id)).ok).toBe(true);
+
+    // The creator panel lists Bob's granted agent as removable only
+    currentUserId = "admin";
+    const page = renderToStaticMarkup(await ChannelDetailPage({ params: Promise.resolve({ id: String(channelId) }) }));
+    // Match button text exactly: the panel's help copy also contains these words.
+    const buttons = (html: string) => [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]);
+    expect(page).toContain("创建者权限");
+    expect(page).toContain("其他成员的 Agent");
+    expect(buttons(page)).toContain("移除");
+    expect(buttons(page)).toContain("授权进入"); // admin's own, ungranted agent
+    expect(buttons(page).filter((b) => b === "授权进入" || b === "取消授权")).toHaveLength(1);
+
+    // The creator cannot grant Bob's agent, but can remove it
+    expect((await revokeAgentGrantAction(channelId, bobAgent!.id)).ok).toBe(true);
+    expect((await grantAgentAction(channelId, bobAgent!.id)).error).toBeTruthy();
+
+    // Bob sees the panel for his own agents, without creator rights or admin's agent
+    currentUserId = "bob";
+    const bobPage = renderToStaticMarkup(await ChannelDetailPage({ params: Promise.resolve({ id: String(channelId) }) }));
+    expect(bobPage).toContain("Bob Bot");
+    expect(buttons(bobPage)).toContain("授权进入");
+    expect(buttons(bobPage)).not.toContain("移除");
+    expect(bobPage).not.toContain("创建者权限");
+    expect(bobPage).not.toContain("Admin Bot");
+  });
+});
+
+describe("Agent grant overview on the Agents page", () => {
+  it("shows each agent's grants and lets only the owner withdraw them", async () => {
+    const { channel } = await createChannelAction({
+      name: "议题 · 授权一览",
+      type: "topic",
+      boardIds: [],
+    });
+    const channelId = channel!.id;
+    const { agent } = await createAgentAction({ displayName: "Overview Bot", provider: "codex" });
+    expect((await grantAgentAction(channelId, agent!.id)).ok).toBe(true);
+
+    const page = renderToStaticMarkup(await AgentsRegistryPage());
+    expect(page).toContain("已授权频道 (1)");
+    expect(page).toContain("议题 · 授权一览");
+    expect(page).toContain(`/collab/${channelId}`);
+    expect(page).toContain("生效中");
+    expect(page).toContain(">撤回</button>");
+
+    // Another user cannot withdraw admin's grant.
+    currentUserId = "bob";
+    expect((await withdrawAgentGrantAction(agent!.id, channelId)).error).toBeTruthy();
+
+    // The owner can, and the overview empties out.
+    currentUserId = "admin";
+    vi.mocked(revalidatePath).mockClear();
+    expect((await withdrawAgentGrantAction(agent!.id, channelId)).ok).toBe(true);
+    expect(vi.mocked(revalidatePath).mock.calls.map((c) => c[0])).toEqual(expect.arrayContaining(["/agents", `/collab/${channelId}`]));
+    expect((await withdrawAgentGrantAction(agent!.id, 0)).error).toBeTruthy();
+    const after = renderToStaticMarkup(await AgentsRegistryPage());
+    expect(after).toContain("尚未授权进入任何频道");
+    expect(after).not.toContain(">撤回</button>");
+  });
+
+  it("shows a dormant grant without the hidden channel's name or link, still withdrawable", async () => {
+    const board = createBoard({ name: "Bob board", createdBy: "bob" });
+    const { channel } = await createChannelAction({ name: "看不见的项目频道", type: "project", boardIds: [board] });
+    const { agent } = await createAgentAction({ displayName: "Dormant Bot", provider: "gemini" });
+    expect((await grantAgentAction(channel!.id, agent!.id)).ok).toBe(true);
+    updateBoard(board, { visibility: "private" });
+    const page = renderToStaticMarkup(await AgentsRegistryPage());
+    expect(page).toContain("无法访问的频道");
+    expect(page).toContain("未生效");
+    expect(page).not.toContain("看不见的项目频道");
+    expect(page).not.toContain(`/collab/${channel!.id}`);
+    expect(page).toContain(">撤回</button>");
+    expect((await withdrawAgentGrantAction(agent!.id, channel!.id)).ok).toBe(true);
+    expect(renderToStaticMarkup(await AgentsRegistryPage())).toContain("尚未授权进入任何频道");
   });
 });
 

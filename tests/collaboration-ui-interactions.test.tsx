@@ -11,6 +11,7 @@ import type { AgentPublic, MessagePublic } from "@/lib/collaboration";
 vi.mock("@/app/actions-collab", () => ({
   createAgentAction: vi.fn(), createHandoffAction: vi.fn(), loadOlderMessagesAction: vi.fn(),
   rotateAgentTokenAction: vi.fn(), revokeAgentAction: vi.fn(), postMessageAction: vi.fn(),
+  withdrawAgentGrantAction: vi.fn(),
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
@@ -90,11 +91,11 @@ describe("Collaboration interaction regressions", () => {
   it("shows a newly issued or rotated token and clears it when dismissed", async () => {
     vi.mocked(createAgentAction).mockResolvedValue({ ok: true, agent: agent("a"), token: "ska_creation_fixture" });
     vi.mocked(rotateAgentTokenAction).mockResolvedValue({ ok: true, token: "ska_rotation_fixture" });
-    await render(<AgentsView initialAgents={[]} />);
+    await render(<AgentsView initialAgents={[]} grants={[]} />);
     await click("注册新 Agent"); await fill("#agent-name", "a"); await click("确定注册");
     expect(host.textContent).toContain("ska_creation_fixture");
     await click("我已经保存好了"); expect(host.textContent).not.toContain("ska_creation_fixture");
-    await render(<AgentsView initialAgents={[agent("a")]} />);
+    await render(<AgentsView initialAgents={[agent("a")]} grants={[]} />);
     await click("重置 Token"); await click("确认重置"); expect(host.textContent).toContain("ska_rotation_fixture");
     await click("我已经保存好了"); expect(host.textContent).not.toContain("ska_rotation_fixture");
     expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);

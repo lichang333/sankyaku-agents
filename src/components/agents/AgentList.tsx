@@ -1,15 +1,28 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useTransition } from "react";
-import { revokeAgentAction, rotateAgentTokenAction } from "@/app/actions-collab";
+import {
+  revokeAgentAction,
+  rotateAgentTokenAction,
+  withdrawAgentGrantAction,
+} from "@/app/actions-collab";
 import { relTime } from "@/lib/dates";
-import type { AgentPublic } from "@/lib/collaboration";
+import type { AgentChannelGrant, AgentPublic, ChannelType } from "@/lib/collaboration";
+
+const CHANNEL_TYPE_LABEL: Record<ChannelType, string> = {
+  project: "项目协作",
+  topic: "议题讨论",
+  bridge: "跨项目协同",
+};
 
 export default function AgentList({
   agents,
+  grants,
   onTokenIssued,
 }: {
   agents: AgentPublic[];
+  grants: AgentChannelGrant[];
   onTokenIssued: (token: string, agentName: string) => void;
 }) {
   const [confirmRotateId, setConfirmRotateId] = useState<string | null>(null);
@@ -43,6 +56,18 @@ export default function AgentList({
     });
   };
 
+  const handleWithdrawGrant = (agentId: string, channelId: number) => {
+    setError(null);
+    startTransition(async () => {
+      const res = await withdrawAgentGrantAction(agentId, channelId);
+      if (res.error) {
+        setError(res.error);
+      }
+    });
+  };
+
+  const grantsOf = (agentId: string) => grants.filter((g) => g.agentId === agentId);
+
   const activeAgents = agents.filter((a) => !a.revoked);
   const revokedAgents = agents.filter((a) => a.revoked);
 
@@ -70,9 +95,10 @@ export default function AgentList({
             {activeAgents.map((agent) => {
               const isRotating = confirmRotateId === agent.id;
               const isRevoking = confirmRevokeId === agent.id;
+              const agentGrants = grantsOf(agent.id);
 
               return (
-                <div key={agent.id} className="duo-card flex flex-col justify-between p-3.5">
+                <div key={agent.id} className="duo-card flex flex-col p-3.5">
                   <div>
                     <div className="flex items-start justify-between gap-2">
                       <h4 className="truncate text-sm font-black">{agent.displayName}</h4>
@@ -92,8 +118,68 @@ export default function AgentList({
                     </div>
                   </div>
 
+                  {/* 已授权频道一览（拥有者可随时撤回，包括已失效的授权） */}
+                  <div className="mb-4 mt-3 border-t border-swan pt-2.5 dark:border-[#37464f]">
+                    <h5 className="text-[11px] font-extrabold text-mid">
+                      已授权频道 ({agentGrants.length})
+                    </h5>
+
+                    {agentGrants.length === 0 ? (
+                      <p className="mt-1 text-[11px] font-bold text-hare">尚未授权进入任何频道</p>
+                    ) : (
+                      <ul className="mt-1.5 space-y-1.5">
+                        {agentGrants.map((g) => (
+                          <li
+                            key={g.channelId}
+                            className="flex items-center justify-between gap-2 rounded-lg border border-swan bg-[var(--card)] p-2 text-[11px] dark:border-[#37464f]"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {g.channelName !== null ? (
+                                  <Link
+                                    href={`/collab/${g.channelId}`}
+                                    className="truncate font-extrabold text-[var(--text)] hover:text-beetle-dark dark:hover:text-beetle"
+                                  >
+                                    {g.channelName}
+                                  </Link>
+                                ) : (
+                                  <span className="truncate font-extrabold text-hare">
+                                    无法访问的频道
+                                  </span>
+                                )}
+                                {g.channelType && (
+                                  <span className="shrink-0 rounded bg-[var(--track)] px-1.5 py-0.2 text-[10px] font-bold text-mid">
+                                    {CHANNEL_TYPE_LABEL[g.channelType]}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="mt-0.5 text-[10px]">
+                                {g.active ? (
+                                  <span className="font-bold text-feather-dark dark:text-feather">
+                                    ● 生效中
+                                  </span>
+                                ) : (
+                                  <span className="text-hare">○ 未生效</span>
+                                )}
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              disabled={isPending}
+                              onClick={() => handleWithdrawGrant(agent.id, g.channelId)}
+                              className="shrink-0 rounded-lg border border-cardinal/40 px-2 py-0.5 text-[11px] font-bold text-cardinal transition-colors hover:bg-cardinal/10 disabled:opacity-50"
+                            >
+                              撤回
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+
                   {/* 操作区域 */}
-                  <div className="mt-4 border-t border-swan pt-2.5 dark:border-[#37464f]">
+                  <div className="mt-auto border-t border-swan pt-2.5 dark:border-[#37464f]">
                     {isRotating ? (
                       <div className="rounded-lg border-2 border-bee/40 bg-bee/10 p-2 text-xs font-bold">
                         <p className="text-bee-dark dark:text-bee">

@@ -5,12 +5,14 @@ import AgentConnectGuide from "./AgentConnectGuide";
 import AgentList from "./AgentList";
 import CreateAgentForm from "./CreateAgentForm";
 import TokenBanner from "./TokenBanner";
-import type { AgentPublic } from "@/lib/collaboration";
+import type { AgentChannelGrant, AgentPublic } from "@/lib/collaboration";
 
 export default function AgentsView({
   initialAgents,
+  grants,
 }: {
   initialAgents: AgentPublic[];
+  grants: AgentChannelGrant[];
 }) {
   const [issuedTokenInfo, setIssuedTokenInfo] = useState<{
     token: string;
@@ -31,6 +33,7 @@ export default function AgentsView({
       {/* 拥有的 Agent 列表 */}
       <AgentList
         agents={initialAgents}
+        grants={grants}
         onTokenIssued={(token, agentName) => setIssuedTokenInfo({ token, agentName })}
       />
 

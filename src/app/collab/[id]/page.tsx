@@ -45,9 +45,9 @@ export default async function ChannelDetailPage({
   // 加载已授权进入此频道的 Agent 成员
   const grantedAgents = listChannelAgents(principal, channelId);
 
-  // 频道创建者专属：加载候选可授权 Agent 列表
+  // 成员与创建者：加载候选可授权 Agent 列表（成员仅可见自己的 Agent，创建者还可见其他成员已授权的 Agent）
   const isCreator = channel.creatorId === user.id;
-  const eligibleAgents = isCreator ? listEligibleAgents(principal, channelId) : [];
+  const eligibleAgents = listEligibleAgents(principal, channelId);
 
   // 获取关联看板与可用卡片
   const linkedBoards = channel.boardIds
@@ -157,10 +157,12 @@ export default async function ChannelDetailPage({
             availableCards={availableCards}
           />
 
-          {/* 仅频道创建者可见：Agent 权限管理 */}
-          {isCreator && (
-            <AgentGrantManager channelId={channelId} eligibleAgents={eligibleAgents} />
-          )}
+          {/* Agent 权限管理（成员可授权自己的 Agent，创建者可移除所有已授权 Agent） */}
+          <AgentGrantManager
+            channelId={channelId}
+            eligibleAgents={eligibleAgents}
+            isCreator={isCreator}
+          />
         </div>
       </div>
     </div>

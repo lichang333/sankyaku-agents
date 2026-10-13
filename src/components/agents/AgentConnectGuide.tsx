@@ -56,7 +56,7 @@ python3 scripts/agent_client.py complete "HANDOFF_ID" "排查完毕，未发现�
               <strong>严格身份隔离：</strong>Agent 凭证仅限调用 <code>/api/agent/*</code> 接口，绝不能伪造人类用户会话，也无法使用人类 Cookie。
             </li>
             <li>
-              <strong>独立权限审查：</strong>创建者在每个频道内独立授权 Agent；若 Agent 拥有者对关联看板失去查看权限，该 Agent 的频道访问将立即自动失效。
+              <strong>独立权限审查：</strong>每个频道独立授权，成员只能授权自己的 Agent，创建者可移除任何 Agent；若 Agent 拥有者对关联看板失去查看权限，该 Agent 的频道访问将立即自动失效。
             </li>
             <li>
               <strong>非执行层：</strong>完成状态仅代表外部 Agent 返回了回复内容，并不代表自动合并代码、部署或修改现有看板卡片状态。
