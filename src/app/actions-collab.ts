@@ -13,6 +13,7 @@ import {
   revokeAgent,
   revokeAgentGrant,
   rotateAgentToken,
+  withdrawOwnAgentGrant,
   type AgentPublic,
   type ChannelPublic,
   type ChannelType,
@@ -253,6 +254,29 @@ export async function revokeAgentGrantAction(
     if (typeof agentId !== "string" || !agentId.trim()) return { error: "无效的 Agent ID" };
 
     revokeAgentGrant(principal, channelId, agentId.trim());
+    revalidatePath(`/collab/${channelId}`);
+    return { ok: true };
+  } catch (err) {
+    return handleCollabError(err);
+  }
+}
+
+/** 拥有者在 Agents 页面撤回自己 Agent 的频道授权（含已失效的授权）。 */
+export async function withdrawAgentGrantAction(
+  agentId: string,
+  channelId: number,
+): Promise<{ ok?: boolean; error?: string }> {
+  try {
+    const user = await requireUser();
+    const principal: Principal = { kind: "human", id: user.id };
+
+    if (typeof agentId !== "string" || !agentId.trim()) return { error: "无效的 Agent ID" };
+    if (!Number.isSafeInteger(channelId) || channelId < 1) {
+      return { error: "无效的频道 ID" };
+    }
+
+    withdrawOwnAgentGrant(principal, agentId.trim(), channelId);
+    revalidatePath("/agents");
     revalidatePath(`/collab/${channelId}`);
     return { ok: true };
   } catch (err) {

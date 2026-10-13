@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import AgentsView from "@/components/agents/AgentsView";
 import Section from "@/components/Section";
-import { listOwnedAgents } from "@/lib/collaboration";
+import { listOwnedAgentGrants, listOwnedAgents } from "@/lib/collaboration";
 import { getSessionUser } from "@/lib/current-user";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +10,9 @@ export default async function AgentsRegistryPage() {
   const user = await getSessionUser();
   if (!user) redirect("/login");
 
-  const ownedAgents = listOwnedAgents({ kind: "human", id: user.id });
+  const principal = { kind: "human", id: user.id } as const;
+  const ownedAgents = listOwnedAgents(principal);
+  const grants = listOwnedAgentGrants(principal);
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 lg:max-w-6xl">
@@ -27,7 +29,7 @@ export default async function AgentsRegistryPage() {
 
       {/* 主视图 */}
       <Section title="我的 Agents" hint={`${ownedAgents.length} 个身份`}>
-        <AgentsView initialAgents={ownedAgents} />
+        <AgentsView initialAgents={ownedAgents} grants={grants} />
       </Section>
     </div>
   );

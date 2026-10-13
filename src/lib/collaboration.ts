@@ -638,6 +638,88 @@ export function listEligibleAgents(
 }
 
 /* ══════════════════════════════════════════════════════════
+ * Owner-side grant overview (Agents page)
+ * ══════════════════════════════════════════════════════════ */
+
+export interface AgentChannelGrant {
+  agentId: string;
+  channelId: number;
+  /** Null when the owner cannot currently access the channel. */
+  channelName: string | null;
+  channelType: ChannelType | null;
+  active: boolean;
+  grantedAt: string;
+}
+
+/**
+ * List every channel grant of the principal's own non-revoked agents.
+ * Channel name and type are disclosed only while the owner can still access the
+ * channel; dormant grants stay visible but unnamed.
+ */
+export function listOwnedAgentGrants(principal: Principal): AgentChannelGrant[] {
+  requireHuman(principal);
+  requirePrincipalExists(principal);
+  ensureCollabSchema();
+
+  const rows = q(`
+    SELECT ca.agent_id, ca.channel_id, ca.granted_at, c.name AS channel_name, c.type AS channel_type
+    FROM collab_channel_agents ca
+    JOIN collab_agents a ON a.id = ca.agent_id
+    JOIN collab_channels c ON c.id = ca.channel_id
+    WHERE a.owner_user_id = ? AND a.revoked_at IS NULL
+    ORDER BY a.created_at ASC, ca.granted_at ASC, ca.channel_id ASC
+  `).all(principal.id) as {
+    agent_id: string;
+    channel_id: number;
+    granted_at: string;
+    channel_name: string;
+    channel_type: string;
+  }[];
+
+  const ownerSees = new Map<number, boolean>();
+  return rows.map((r) => {
+    let visible = ownerSees.get(r.channel_id);
+    if (visible === undefined) {
+      visible = canAccessChannel(principal, r.channel_id);
+      ownerSees.set(r.channel_id, visible);
+    }
+    return {
+      agentId: r.agent_id,
+      channelId: r.channel_id,
+      channelName: visible ? r.channel_name : null,
+      channelType: visible ? (r.channel_type as ChannelType) : null,
+      active: canAccessChannel({ kind: "agent", id: r.agent_id }, r.channel_id),
+      grantedAt: r.granted_at,
+    };
+  });
+}
+
+/**
+ * Withdraw one of the owner's own agent grants from the Agents page.
+ * Deliberately does NOT require channel access, so an owner who lost sight of a
+ * channel can still remove their agent's dormant grant.
+ */
+export function withdrawOwnAgentGrant(
+  principal: Principal,
+  agentId: string,
+  channelId: number,
+): void {
+  requireHuman(principal);
+  requirePrincipalExists(principal);
+  ensureCollabSchema();
+
+  if (!Number.isSafeInteger(channelId) || channelId < 1) throw new CollabError(404, "Not found");
+
+  const agent = getAgentRow(agentId);
+  if (!agent || agent.owner_user_id !== principal.id) throw new CollabError(404, "Not found");
+
+  q("DELETE FROM collab_channel_agents WHERE channel_id = ? AND agent_id = ?").run(
+    channelId,
+    agentId,
+  );
+}
+
+/* ══════════════════════════════════════════════════════════
  * Messages
  * ══════════════════════════════════════════════════════════ */
 
